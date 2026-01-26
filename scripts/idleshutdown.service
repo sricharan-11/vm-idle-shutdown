@@ -1,0 +1,17 @@
+[Unit]
+Description=IdleShutdown Agent - VM Idle Monitoring Service
+Documentation=https://github.com/example/idleshutdown
+After=network.target
+
+[Service]
+Type=simple
+# The --config flag explicitly tells the agent where to find the INI file
+ExecStart=/usr/local/bin/idleshutdown --config /etc/idleshutdown/config.ini
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=IdleShutdown
+
+[Install]
+WantedBy=multi-user.target
