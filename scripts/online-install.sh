@@ -3,27 +3,20 @@
 # IdleShutdown Agent - Online Installer
 # 
 # ONE-LINE INSTALL:
-#   curl -sSL https://raw.githubusercontent.com/YOUR_USERNAME/IdleShutdownAgent/main/scripts/online-install.sh | sudo bash
-#
-# Or with wget:
-#   wget -qO- https://raw.githubusercontent.com/YOUR_USERNAME/IdleShutdownAgent/main/scripts/online-install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/sricharan-11/vm-idle-shutdown/main/scripts/online-install.sh | sudo bash
 #
 
 set -e
 
 # ============================================
-# CONFIGURATION - Update these for your repo
+# CONFIGURATION
 # ============================================
 GITHUB_USER="sricharan-11"
 GITHUB_REPO="vm-idle-shutdown"
 GITHUB_BRANCH="main"
-VERSION="v1.0.0"  # or "latest"
 
 # GitHub raw content base URL
 BASE_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
-
-# For binary, use GitHub Releases (recommended for binaries)
-RELEASE_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/download/${VERSION}"
 
 # ============================================
 # Installation paths
@@ -74,11 +67,18 @@ if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
     systemctl stop ${SERVICE_NAME}
 fi
 
-# Step 1: Download binary
+# Step 1: Download binary from main branch
 echo -e "${CYAN}[1/5]${NC} Downloading binary..."
-${DOWNLOADER} "${TEMP_DIR}/${BINARY_NAME}" "${RELEASE_URL}/${BINARY_NAME}"
-if [[ ! -f "${TEMP_DIR}/${BINARY_NAME}" ]]; then
+${DOWNLOADER} "${TEMP_DIR}/${BINARY_NAME}" "${BASE_URL}/${BINARY_NAME}"
+if [[ ! -f "${TEMP_DIR}/${BINARY_NAME}" ]] || [[ ! -s "${TEMP_DIR}/${BINARY_NAME}" ]]; then
     echo -e "${RED}ERROR: Failed to download binary${NC}"
+    exit 1
+fi
+# Verify it's actually a binary (ELF file)
+if ! file "${TEMP_DIR}/${BINARY_NAME}" | grep -q "ELF"; then
+    echo -e "${RED}ERROR: Downloaded file is not a valid Linux binary${NC}"
+    echo "Downloaded content:"
+    head -c 200 "${TEMP_DIR}/${BINARY_NAME}"
     exit 1
 fi
 cp "${TEMP_DIR}/${BINARY_NAME}" "${BINARY_DEST}"
