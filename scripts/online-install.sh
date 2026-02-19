@@ -103,9 +103,13 @@ fi
 
 # Step 4: Download calibration defaults
 echo -e "${CYAN}[4/6]${NC} Installing calibration defaults..."
-${DOWNLOADER} "${DEFAULTS_FILE}" "${BASE_URL}/config/default.ini"
-chmod 644 "${DEFAULTS_FILE}"
-echo -e "${GREEN}      ✓ Defaults installed${NC}"
+if [[ -f "${DEFAULTS_FILE}" ]]; then
+    echo -e "${YELLOW}      ⚠ Defaults file exists - keeping existing values${NC}"
+else
+    ${DOWNLOADER} "${DEFAULTS_FILE}" "${BASE_URL}/config/default.ini"
+    chmod 644 "${DEFAULTS_FILE}"
+    echo -e "${GREEN}      ✓ Defaults installed${NC}"
+fi
 
 # Step 5: Download and install systemd service
 echo -e "${CYAN}[5/6]${NC} Installing systemd service..."

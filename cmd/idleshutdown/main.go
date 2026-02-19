@@ -54,6 +54,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading defaults: %v", err)
 	}
+	log.Printf("Calibration defaults loaded: Initial=%v hours, Recalib=%v days, Lookback=%v hours",
+		calibCfg.InitialTrackingHours, calibCfg.RecalibrationIntervalDays, calibCfg.RecalibrationTrackingHours)
 
 	// Create stop channel for graceful shutdown
 	stopCh := make(chan struct{})

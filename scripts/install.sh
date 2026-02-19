@@ -88,9 +88,13 @@ fi
 
 # Step 4: Install calibration defaults
 echo -e "${CYAN}[4/6]${NC} Installing calibration defaults..."
-cp "${PROJECT_DIR}/config/default.ini" "${DEFAULTS_FILE}"
-chmod 644 "${DEFAULTS_FILE}"
-echo -e "${GREEN}      ✓ Defaults installed to ${DEFAULTS_FILE}${NC}"
+if [[ -f "${DEFAULTS_FILE}" ]]; then
+    echo -e "${YELLOW}      ⚠ Defaults file exists - keeping existing values${NC}"
+else
+    cp "${PROJECT_DIR}/config/default.ini" "${DEFAULTS_FILE}"
+    chmod 644 "${DEFAULTS_FILE}"
+    echo -e "${GREEN}      ✓ Defaults installed to ${DEFAULTS_FILE}${NC}"
+fi
 
 # Step 5: Install systemd service
 echo -e "${CYAN}[5/6]${NC} Installing systemd service..."
