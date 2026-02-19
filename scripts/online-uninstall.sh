@@ -3,7 +3,7 @@
 # IdleShutdown Agent - Online Uninstaller
 #
 # ONE-LINE UNINSTALL:
-#   curl -sSL https://raw.githubusercontent.com/YOUR_USERNAME/IdleShutdownAgent/main/scripts/online-uninstall.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/sricharan-11/vm-idle-shutdown/main/scripts/online-uninstall.sh | sudo bash
 #
 
 set -e

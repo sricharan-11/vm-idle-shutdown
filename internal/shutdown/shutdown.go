@@ -1,41 +1,37 @@
-// Package shutdown provides VM shutdown capabilities
+// Package shutdown provides VM shutdown capabilities.
 package shutdown
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"time"
 )
 
-// Executor handles system shutdown operations
+// Executor handles system shutdown operations.
 type Executor struct {
-	// DryRun if true, logs shutdown action without actually shutting down
 	DryRun bool
 }
 
-// NewExecutor creates a new shutdown executor
+// NewExecutor creates a new shutdown executor.
 func NewExecutor(dryRun bool) *Executor {
 	return &Executor{DryRun: dryRun}
 }
 
-// Shutdown initiates a system shutdown
+// Shutdown initiates a system shutdown with a reason logged to the journal.
 func (e *Executor) Shutdown(reason string) error {
-	timestamp := time.Now().Format(time.RFC3339)
-	
-	fmt.Printf("=== SHUTDOWN INITIATED ===\n")
-	fmt.Printf("Time: %s\n", timestamp)
-	fmt.Printf("Reason: %s\n", reason)
-	fmt.Printf("========================\n")
+	log.Println("=== SHUTDOWN INITIATED ===")
+	log.Printf("Time:   %s", time.Now().Format(time.RFC3339))
+	log.Printf("Reason: %s", reason)
 
 	if e.DryRun {
-		fmt.Printf("[DRY RUN] Would execute: shutdown -h now\n")
+		log.Println("[DRY RUN] Would execute: shutdown -h now")
 		return nil
 	}
 
-	// Execute shutdown command
 	cmd := exec.Command("shutdown", "-h", "now")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to execute shutdown command: %w", err)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("shutdown command failed: %w — %s", err, string(output))
 	}
 
 	return nil
