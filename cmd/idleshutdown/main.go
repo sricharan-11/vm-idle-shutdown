@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"idleshutdown/internal/calibrator"
 	"idleshutdown/internal/config"
 	"idleshutdown/internal/monitor"
 	"idleshutdown/internal/shutdown"
@@ -20,6 +22,8 @@ const (
 	samplingInterval = 30 * time.Second
 	// Evaluation interval for shutdown decision (1 minute)
 	evaluationInterval = 1 * time.Minute
+	// Calibration check interval (check every hour if calibration is due)
+	calibrationCheckInterval = 1 * time.Hour
 )
 
 func main() {
@@ -63,13 +67,23 @@ func main() {
 	// Initialize shutdown executor
 	shutdownExec := shutdown.NewExecutor(*dryRun)
 
-	// Main evaluation loop
-	fmt.Println("Starting evaluation loop...")
-	fmt.Printf("Will check: CPU < %d%% for %d min AND 0 users for %d min\n",
-		cfg.CPUThreshold, cfg.CPUCheckMinutes, cfg.UserCheckMinutes)
+	// Start auto-calibration goroutine if in auto mode
+	if cfg.IsAutoMode() {
+		fmt.Println("CPU mode: AUTO - Will self-calibrate idle CPU threshold")
+		fmt.Printf("  Initial calibration: after 24h of data\n")
+		fmt.Printf("  Weekly recalibration: every 7 days using 72h of data\n")
+		go runCalibrationLoop(*configPath, cpuMonitor, stopCh)
+	} else {
+		fmt.Printf("CPU mode: MANUAL - Using fixed threshold of %d%%\n", cfg.CPUThreshold)
+	}
 
+	// Main evaluation loop
 	ticker := time.NewTicker(evaluationInterval)
 	defer ticker.Stop()
+
+	fmt.Println("Starting evaluation loop...")
+	fmt.Printf("Shutdown condition: CPU < %d%% for %d min AND 0 users for %d min\n",
+		cfg.CPUThreshold, cfg.CPUCheckMinutes, cfg.UserCheckMinutes)
 
 	for {
 		select {
@@ -80,8 +94,62 @@ func main() {
 			return
 
 		case <-ticker.C:
+			// Reload config each tick so calibration threshold updates take effect
+			latestCfg, err := config.Load(*configPath)
+			if err != nil {
+				fmt.Printf("Warning: could not reload config: %v - using last known config\n", err)
+				latestCfg = cfg
+			}
+			cfg = latestCfg
 			evaluateShutdownCondition(cfg, cpuMonitor, userMonitor, shutdownExec)
 		}
+	}
+}
+
+// runCalibrationLoop runs the auto-calibration process in a background goroutine.
+// It waits for 24h of data, runs initial calibration, then recalibrates weekly with 72h lookback.
+func runCalibrationLoop(configPath string, cpuMon *monitor.CPUMonitor, stopCh <-chan struct{}) {
+	calib := calibrator.New(configPath, config.DefaultStatePath)
+	ticker := time.NewTicker(calibrationCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			samples := cpuMon.GetSamples()
+
+			if calib.ShouldRunInitial() {
+				fmt.Println("[Calibrator] 24h elapsed - running initial calibration...")
+				threshold, err := calib.Run(samples, calibrator.InitialLookback)
+				if err != nil {
+					fmt.Printf("[Calibrator] Initial calibration failed: %v\n", err)
+					continue
+				}
+				fmt.Printf("[Calibrator] Initial calibration complete: cpu_threshold set to %.0f%%\n", threshold)
+				restartService()
+
+			} else if calib.ShouldRunWeekly() {
+				fmt.Println("[Calibrator] Weekly recalibration due - running with 72h lookback...")
+				threshold, err := calib.Run(samples, calibrator.WeeklyLookback)
+				if err != nil {
+					fmt.Printf("[Calibrator] Weekly recalibration failed: %v\n", err)
+					continue
+				}
+				fmt.Printf("[Calibrator] Weekly recalibration complete: cpu_threshold set to %.0f%%\n", threshold)
+				restartService()
+			}
+		}
+	}
+}
+
+// restartService restarts the IdleShutdown systemd service to pick up the new config.
+func restartService() {
+	fmt.Println("[Calibrator] Restarting service to apply new threshold...")
+	cmd := exec.Command("systemctl", "restart", "IdleShutdown")
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("[Calibrator] Warning: could not restart service: %v\n", err)
 	}
 }
 
@@ -110,7 +178,7 @@ func evaluateShutdownCondition(
 	if cpuBelowThreshold && noUsers {
 		reason := fmt.Sprintf("VM idle - CPU below %d%% for %d minutes and no users logged in for %d minutes",
 			cfg.CPUThreshold, cfg.CPUCheckMinutes, cfg.UserCheckMinutes)
-		
+
 		if err := shutdownExec.Shutdown(reason); err != nil {
 			fmt.Printf("Error executing shutdown: %v\n", err)
 		}

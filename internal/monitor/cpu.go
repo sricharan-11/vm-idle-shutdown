@@ -18,7 +18,13 @@ type CPUMonitor struct {
 	interval time.Duration
 }
 
-// cpuSample represents a single CPU usage measurement
+// CPUSample is an exported snapshot of a CPU usage measurement
+type CPUSample struct {
+	Timestamp time.Time
+	Usage     float64
+}
+
+// cpuSample represents a single CPU usage measurement (internal)
 type cpuSample struct {
 	timestamp time.Time
 	usage     float64
@@ -77,8 +83,8 @@ func (m *CPUMonitor) takeSample() {
 		usage:     usage,
 	})
 
-	// Keep only samples from the last 2 hours to avoid memory growth
-	cutoff := time.Now().Add(-2 * time.Hour)
+	// Keep samples from the last 72 hours (required for weekly calibration lookback)
+	cutoff := time.Now().Add(-72 * time.Hour)
 	filtered := make([]cpuSample, 0, len(m.samples))
 	for _, s := range m.samples {
 		if s.timestamp.After(cutoff) {
@@ -199,4 +205,16 @@ func (m *CPUMonitor) GetCurrentUsage() float64 {
 		return 0
 	}
 	return m.samples[len(m.samples)-1].usage
+}
+
+// GetSamples returns a snapshot of all retained CPU samples as exported types.
+// Used by the auto-calibrator for baseline analysis.
+func (m *CPUMonitor) GetSamples() []CPUSample {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]CPUSample, len(m.samples))
+	for i, s := range m.samples {
+		result[i] = CPUSample{Timestamp: s.timestamp, Usage: s.usage}
+	}
+	return result
 }
