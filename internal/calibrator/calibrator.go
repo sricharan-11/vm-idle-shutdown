@@ -197,6 +197,7 @@ func StripBanner(configPath string) {
 	inBanner := false
 
 	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r") // Ensure no dangling CR
 		trimmed := strings.TrimSpace(line)
 		if trimmed == bannerStart {
 			inBanner = true
@@ -241,6 +242,7 @@ func (c *Calibrator) writeBannerToConfig(banner []string) {
 	bannerInserted := false
 
 	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r") // Ensure no dangling CR
 		trimmed := strings.TrimSpace(line)
 
 		// Skip existing banner
