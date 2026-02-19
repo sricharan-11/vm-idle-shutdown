@@ -9,6 +9,7 @@
 #   1. Copies the 'idleshutdown' binary to /usr/local/bin/
 #   2. Creates /etc/idleshutdown/ directory
 #   3. Copies config.ini to /etc/idleshutdown/config.ini (preserves existing)
+#   3b. Copies default.ini to /etc/idleshutdown/default.ini
 #   4. Installs the systemd service unit file
 #   5. Enables and starts the IdleShutdown service
 #
@@ -27,6 +28,7 @@ BINARY_NAME="idleshutdown"
 BINARY_DEST="/usr/local/bin/${BINARY_NAME}"
 CONFIG_DIR="/etc/idleshutdown"
 CONFIG_FILE="${CONFIG_DIR}/config.ini"
+DEFAULTS_FILE="${CONFIG_DIR}/default.ini"
 SERVICE_NAME="IdleShutdown"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -63,18 +65,18 @@ if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
 fi
 
 # Step 1: Install binary
-echo -e "${CYAN}[1/5]${NC} Installing binary to ${BINARY_DEST}..."
+echo -e "${CYAN}[1/6]${NC} Installing binary to ${BINARY_DEST}..."
 cp "${BINARY_SOURCE}" "${BINARY_DEST}"
 chmod 755 "${BINARY_DEST}"
 echo -e "${GREEN}      ✓ Binary installed${NC}"
 
 # Step 2: Create config directory
-echo -e "${CYAN}[2/5]${NC} Creating config directory ${CONFIG_DIR}..."
+echo -e "${CYAN}[2/6]${NC} Creating config directory ${CONFIG_DIR}..."
 mkdir -p "${CONFIG_DIR}"
 echo -e "${GREEN}      ✓ Directory created${NC}"
 
 # Step 3: Install config file
-echo -e "${CYAN}[3/5]${NC} Installing configuration file..."
+echo -e "${CYAN}[3/6]${NC} Installing configuration file..."
 if [[ -f "${CONFIG_FILE}" ]]; then
     echo -e "${YELLOW}      ⚠ Config file exists - keeping existing configuration${NC}"
     echo -e "${YELLOW}        To reset: rm ${CONFIG_FILE} && re-run install.sh${NC}"
@@ -84,15 +86,21 @@ else
     echo -e "${GREEN}      ✓ Configuration installed to ${CONFIG_FILE}${NC}"
 fi
 
-# Step 4: Install systemd service
-echo -e "${CYAN}[4/5]${NC} Installing systemd service..."
+# Step 4: Install calibration defaults
+echo -e "${CYAN}[4/6]${NC} Installing calibration defaults..."
+cp "${PROJECT_DIR}/config/default.ini" "${DEFAULTS_FILE}"
+chmod 644 "${DEFAULTS_FILE}"
+echo -e "${GREEN}      ✓ Defaults installed to ${DEFAULTS_FILE}${NC}"
+
+# Step 5: Install systemd service
+echo -e "${CYAN}[5/6]${NC} Installing systemd service..."
 cp "${SCRIPT_DIR}/idleshutdown.service" "${SERVICE_FILE}"
 chmod 644 "${SERVICE_FILE}"
 systemctl daemon-reload
 echo -e "${GREEN}      ✓ Service installed${NC}"
 
-# Step 5: Enable and start service
-echo -e "${CYAN}[5/5]${NC} Enabling and starting service..."
+# Step 6: Enable and start service
+echo -e "${CYAN}[6/6]${NC} Enabling and starting service..."
 systemctl enable ${SERVICE_NAME} --quiet
 systemctl start ${SERVICE_NAME}
 echo -e "${GREEN}      ✓ Service started${NC}"

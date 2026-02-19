@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -28,6 +29,7 @@ const (
 
 func main() {
 	configPath := flag.String("config", config.DefaultConfigPath, "Path to configuration file")
+	defaultsPath := flag.String("defaults", config.DefaultDefaultsPath, "Path to defaults file")
 	dryRun := flag.Bool("dry-run", false, "Run in dry-run mode (no actual shutdown)")
 	flag.Parse()
 
@@ -36,8 +38,9 @@ func main() {
 	log.Println("===========================================")
 	log.Println("  IdleShutdown Agent Starting")
 	log.Println("===========================================")
-	log.Printf("Config path: %s", *configPath)
-	log.Printf("Dry-run mode: %v", *dryRun)
+	log.Printf("Config path:   %s", *configPath)
+	log.Printf("Defaults path: %s", *defaultsPath)
+	log.Printf("Dry-run mode:  %v", *dryRun)
 
 	// Load configuration
 	cfg, err := config.Load(*configPath)
@@ -45,6 +48,12 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 	log.Printf("Configuration loaded: %s", cfg)
+
+	// Load calibration defaults
+	calibCfg, err := config.LoadDefaults(*defaultsPath)
+	if err != nil {
+		log.Fatalf("Error loading defaults: %v", err)
+	}
 
 	// Create stop channel for graceful shutdown
 	stopCh := make(chan struct{})
@@ -66,14 +75,33 @@ func main() {
 	// Initialize shutdown executor
 	shutdownExec := shutdown.NewExecutor(*dryRun)
 
-	// Start auto-calibration goroutine if in auto mode
-	if cfg.IsAutoMode() {
-		log.Println("CPU mode: AUTO — will self-calibrate idle CPU threshold")
-		log.Printf("  Initial calibration: after %s of data", calibrator.InitialLookback)
-		log.Printf("  Weekly recalibration: every %s using %s of data", calibrator.CalibrationInterval, calibrator.WeeklyLookback)
-		go runCalibrationLoop(*configPath, cpuMonitor, stopCh)
+	// Handle auto/manual mode
+	var calib *calibrator.Calibrator
+
+	if cfg.AutoMode {
+		log.Println("Mode: AUTO — cpu_threshold is absent (commented out)")
+
+		calib = calibrator.New(*configPath, config.DefaultStatePath, calibCfg)
+
+		if calib.IsInLearningPhase() {
+			remaining := calib.LearningTimeRemaining()
+			log.Printf("  📊 Learning phase: %s remaining — shutdown evaluation PAUSED",
+				formatDuration(remaining))
+			log.Printf("  Initial calibration: after %s of data", calibCfg.InitialLookback())
+			calib.WriteLearningBanner()
+		} else {
+			threshold := calib.CurrentThreshold()
+			cfg.CPUThreshold = threshold
+			log.Printf("  Calibrated threshold: %d%%", threshold)
+			log.Printf("  Recalibration: every %s using %s of data",
+				calibCfg.RecalibrationInterval(), calibCfg.RecalibrationLookback())
+		}
+
+		go runCalibrationLoop(calib, calibCfg, cpuMonitor, stopCh)
 	} else {
-		log.Printf("CPU mode: MANUAL — using fixed threshold of %d%%", cfg.CPUThreshold)
+		log.Printf("Mode: MANUAL — cpu_threshold = %d%% (set in config.ini)", cfg.CPUThreshold)
+		// Strip any leftover auto-mode banner
+		calibrator.StripBanner(*configPath)
 	}
 
 	// Main evaluation loop
@@ -81,8 +109,6 @@ func main() {
 	defer ticker.Stop()
 
 	log.Println("Entering evaluation loop...")
-	log.Printf("Shutdown triggers when: CPU < %d%% for %d min AND 0 users for %d min",
-		cfg.CPUThreshold, cfg.CPUCheckMinutes, cfg.UserCheckMinutes)
 
 	for {
 		select {
@@ -93,22 +119,39 @@ func main() {
 			return
 
 		case <-ticker.C:
-			// Reload config each tick so calibration threshold updates take effect
+			// Reload config each tick
 			latestCfg, reloadErr := config.Load(*configPath)
 			if reloadErr != nil {
 				log.Printf("Warning: config reload failed: %v — using last known config", reloadErr)
 			} else {
 				cfg = latestCfg
 			}
+
+			// In auto mode during learning phase: skip eval
+			if cfg.AutoMode && calib != nil && calib.IsInLearningPhase() {
+				remaining := calib.LearningTimeRemaining()
+				log.Printf("Learning phase: %s remaining — skipping shutdown evaluation",
+					formatDuration(remaining))
+				continue
+			}
+
+			// In auto mode: use threshold from calibration state
+			if cfg.AutoMode && calib != nil {
+				cfg.CPUThreshold = calib.CurrentThreshold()
+			}
+
 			evaluateShutdownCondition(cfg, cpuMonitor, userMonitor, shutdownExec)
 		}
 	}
 }
 
-// runCalibrationLoop runs the auto-calibration process in a background goroutine.
-// It waits for 24h of data, runs initial calibration, then recalibrates weekly.
-func runCalibrationLoop(configPath string, cpuMon *monitor.CPUMonitor, stopCh <-chan struct{}) {
-	calib := calibrator.New(configPath, config.DefaultStatePath)
+// runCalibrationLoop runs initial and periodic recalibration.
+func runCalibrationLoop(
+	calib *calibrator.Calibrator,
+	calibCfg *config.CalibrationConfig,
+	cpuMon *monitor.CPUMonitor,
+	stopCh <-chan struct{},
+) {
 	ticker := time.NewTicker(calibrationCheckInterval)
 	defer ticker.Stop()
 
@@ -121,31 +164,35 @@ func runCalibrationLoop(configPath string, cpuMon *monitor.CPUMonitor, stopCh <-
 
 			if calib.ShouldRunInitial() {
 				log.Printf("[Calibrator] %s elapsed — running initial calibration (%d samples)...",
-					calibrator.InitialLookback, len(samples))
-				threshold, err := calib.Run(samples, calibrator.InitialLookback)
+					calibCfg.InitialLookback(), len(samples))
+				threshold, err := calib.Run(samples, calibCfg.InitialLookback())
 				if err != nil {
 					log.Printf("[Calibrator] Initial calibration failed: %v", err)
 					continue
 				}
-				log.Printf("[Calibrator] Initial calibration complete: cpu_threshold = %.0f%%", threshold)
+				log.Printf("[Calibrator] ✅ Initial calibration complete: cpu_threshold = %.0f%%", threshold)
 				restartService()
 
 			} else if calib.ShouldRunWeekly() {
 				log.Printf("[Calibrator] Weekly recalibration due — %s lookback (%d samples)...",
-					calibrator.WeeklyLookback, len(samples))
-				threshold, err := calib.Run(samples, calibrator.WeeklyLookback)
+					calibCfg.RecalibrationLookback(), len(samples))
+				threshold, err := calib.Run(samples, calibCfg.RecalibrationLookback())
 				if err != nil {
 					log.Printf("[Calibrator] Weekly recalibration failed: %v", err)
 					continue
 				}
-				log.Printf("[Calibrator] Weekly recalibration complete: cpu_threshold = %.0f%%", threshold)
+				log.Printf("[Calibrator] ✅ Weekly recalibration complete: cpu_threshold = %.0f%%", threshold)
 				restartService()
+
+			} else if calib.IsInLearningPhase() {
+				// Refresh the learning banner with updated remaining time
+				calib.WriteLearningBanner()
 			}
 		}
 	}
 }
 
-// restartService restarts the IdleShutdown systemd service to pick up the new config.
+// restartService restarts the IdleShutdown systemd service.
 func restartService() {
 	log.Println("[Calibrator] Restarting service to apply new threshold...")
 	cmd := exec.Command("systemctl", "restart", "IdleShutdown")
@@ -154,7 +201,7 @@ func restartService() {
 	}
 }
 
-// evaluateShutdownCondition checks if both idle conditions are met and triggers shutdown.
+// evaluateShutdownCondition checks if both idle conditions are met.
 func evaluateShutdownCondition(
 	cfg *config.Config,
 	cpuMon *monitor.CPUMonitor,
@@ -171,14 +218,22 @@ func evaluateShutdownCondition(
 	noUsers := userMon.NoUsersLoggedIn(cfg.UserCheckMinutes)
 
 	if cpuBelowThreshold && noUsers {
-		reason := log.Prefix() // Suppress the prefix just for this log
-		_ = reason
-		log.Printf("SHUTDOWN TRIGGERED — CPU < %d%% for %d min, 0 users for %d min",
+		log.Printf("🛑 SHUTDOWN TRIGGERED — CPU < %d%% for %d min, 0 users for %d min",
 			cfg.CPUThreshold, cfg.CPUCheckMinutes, cfg.UserCheckMinutes)
 
-		shutdownReason := "VM idle — CPU below threshold and no users logged in"
-		if err := shutdownExec.Shutdown(shutdownReason); err != nil {
+		reason := "VM idle — CPU below threshold and no users logged in"
+		if err := shutdownExec.Shutdown(reason); err != nil {
 			log.Printf("ERROR: shutdown command failed: %v", err)
 		}
 	}
+}
+
+// formatDuration returns a human-readable duration like "23h 14m".
+func formatDuration(d time.Duration) string {
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
 }

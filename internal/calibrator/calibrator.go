@@ -12,18 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"idleshutdown/internal/config"
 	"idleshutdown/internal/monitor"
-
-	"gopkg.in/ini.v1"
 )
 
 const (
-	// InitialLookback is how long the agent accumulates data before first calibration.
-	InitialLookback = 24 * time.Hour
-	// WeeklyLookback is the window analyzed for weekly recalibration.
-	WeeklyLookback = 72 * time.Hour
-	// CalibrationInterval is how often the weekly re-calibration runs.
-	CalibrationInterval = 7 * 24 * time.Hour
 	// ThresholdBuffer is added to idle baseline when setting cpu_threshold.
 	ThresholdBuffer = 3.0
 	// MinThreshold ensures cpu_threshold never goes dangerously low.
@@ -38,27 +31,35 @@ const (
 	minWindowSamples = 5
 	// minCalibSamples is the minimum total samples for a calibration run.
 	minCalibSamples = 10
+
+	// Banner markers for config.ini
+	bannerStart = "# ┌──────────────────────────────────────────────────────────┐"
+	bannerEnd   = "# └──────────────────────────────────────────────────────────┘"
 )
 
-// state tracks calibration history persisted to disk.
-type state struct {
-	InitialDone   bool
-	LastCalibTime time.Time
-	StartTime     time.Time
+// State tracks calibration history persisted to disk.
+type State struct {
+	InitialDone      bool
+	LastCalibTime    time.Time
+	StartTime        time.Time
+	CurrentThreshold float64
+	IdleBaseline     float64
 }
 
 // Calibrator manages automatic CPU threshold detection.
 type Calibrator struct {
 	configPath string
 	statePath  string
-	state      state
+	calibCfg   *config.CalibrationConfig
+	state      State
 }
 
-// New creates a new Calibrator, loading any persisted state.
-func New(configPath, statePath string) *Calibrator {
+// New creates a new Calibrator with configurable timings.
+func New(configPath, statePath string, calibCfg *config.CalibrationConfig) *Calibrator {
 	c := &Calibrator{
 		configPath: configPath,
 		statePath:  statePath,
+		calibCfg:   calibCfg,
 	}
 	c.loadState()
 	if c.state.StartTime.IsZero() {
@@ -70,19 +71,37 @@ func New(configPath, statePath string) *Calibrator {
 	return c
 }
 
-// ShouldRunInitial returns true if 24h of data has been collected and
-// initial calibration hasn't been done yet.
+// IsInLearningPhase returns true if we're still collecting initial data.
+func (c *Calibrator) IsInLearningPhase() bool {
+	return !c.state.InitialDone
+}
+
+// LearningTimeRemaining returns how much time is left in the learning phase.
+func (c *Calibrator) LearningTimeRemaining() time.Duration {
+	elapsed := time.Since(c.state.StartTime)
+	remaining := c.calibCfg.InitialLookback() - elapsed
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// CurrentThreshold returns the last calibrated threshold, or 0 if not yet calibrated.
+func (c *Calibrator) CurrentThreshold() int {
+	return int(math.Round(c.state.CurrentThreshold))
+}
+
+// ShouldRunInitial returns true if the initial tracking time has elapsed.
 func (c *Calibrator) ShouldRunInitial() bool {
-	return !c.state.InitialDone && time.Since(c.state.StartTime) >= InitialLookback
+	return !c.state.InitialDone && time.Since(c.state.StartTime) >= c.calibCfg.InitialLookback()
 }
 
-// ShouldRunWeekly returns true if a week has passed since last calibration.
+// ShouldRunWeekly returns true if the recalibration interval has elapsed.
 func (c *Calibrator) ShouldRunWeekly() bool {
-	return c.state.InitialDone && time.Since(c.state.LastCalibTime) >= CalibrationInterval
+	return c.state.InitialDone && time.Since(c.state.LastCalibTime) >= c.calibCfg.RecalibrationInterval()
 }
 
-// Run performs calibration using the provided samples and the given lookback window.
-// It updates the config file and returns the new threshold.
+// Run performs calibration and returns the new threshold.
 func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (float64, error) {
 	cutoff := time.Now().Add(-lookback)
 	var window []monitor.CPUSample
@@ -93,7 +112,7 @@ func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (f
 	}
 
 	if len(window) < minCalibSamples {
-		return 0, fmt.Errorf("insufficient samples (%d, need %d) for calibration", len(window), minCalibSamples)
+		return 0, fmt.Errorf("insufficient samples (%d, need %d)", len(window), minCalibSamples)
 	}
 
 	log.Printf("[Calibrator] Calibrating on %d samples from last %s", len(window), lookback)
@@ -108,21 +127,154 @@ func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (f
 
 	log.Printf("[Calibrator] Idle baseline=%.2f%%, New threshold=%.0f%%", idleBaseline, rounded)
 
-	if err := c.updateConfigThreshold(rounded); err != nil {
-		return 0, fmt.Errorf("failed to update config: %w", err)
-	}
-
+	// Update state
 	c.state.InitialDone = true
 	c.state.LastCalibTime = time.Now()
+	c.state.CurrentThreshold = rounded
+	c.state.IdleBaseline = idleBaseline
 	if err := c.saveState(); err != nil {
 		log.Printf("[Calibrator] Warning: could not persist state: %v", err)
 	}
 
+	// Write banner to config.ini
+	c.WriteCalibratedBanner()
+
 	return rounded, nil
 }
 
-// findIdleBaseline scans samples with a sliding window to find stable idle periods.
-// Tries tight stddev first, then falls back to a looser threshold.
+// WriteLearningBanner writes a learning-phase banner into config.ini.
+func (c *Calibrator) WriteLearningBanner() {
+	remaining := c.LearningTimeRemaining()
+	hours := int(remaining.Hours())
+	mins := int(remaining.Minutes()) % 60
+
+	banner := []string{
+		bannerStart,
+		fmt.Sprintf("# │  🔍 LEARNING — collecting CPU data (%dh %dm remaining)%s│",
+			hours, mins, padTo(52, fmt.Sprintf("🔍 LEARNING — collecting CPU data (%dh %dm remaining)", hours, mins))),
+		"# │  Shutdown evaluation is PAUSED until learning completes  │",
+		"# │  To set manually, uncomment cpu_threshold below          │",
+		bannerEnd,
+	}
+	c.writeBannerToConfig(banner)
+}
+
+// WriteCalibratedBanner writes the auto-managed banner with calibration metadata.
+func (c *Calibrator) WriteCalibratedBanner() {
+	nextCalib := c.state.LastCalibTime.Add(c.calibCfg.RecalibrationInterval())
+
+	banner := []string{
+		bannerStart,
+		"# │  ⚡ AUTO-MANAGED — to set manually, uncomment below      │",
+		fmt.Sprintf("# │  Last calibrated : %-38s│", c.state.LastCalibTime.Format("2006-01-02 15:04 UTC")),
+		fmt.Sprintf("# │  Idle baseline   : %-38s│", fmt.Sprintf("%.1f%%", c.state.IdleBaseline)),
+		fmt.Sprintf("# │  Current value   : %-38s│", fmt.Sprintf("%.0f%% (active)", c.state.CurrentThreshold)),
+		fmt.Sprintf("# │  Next calibration: %-38s│", "~"+nextCalib.Format("2006-01-02")),
+		bannerEnd,
+	}
+	c.writeBannerToConfig(banner)
+}
+
+// StripBanner removes any existing banner from config.ini (used when switching to manual).
+func StripBanner(configPath string) {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var result []string
+	inBanner := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == bannerStart {
+			inBanner = true
+			continue
+		}
+		if inBanner {
+			if trimmed == bannerEnd {
+				inBanner = false
+				continue
+			}
+			continue // skip banner content
+		}
+		result = append(result, line)
+	}
+
+	cleaned := strings.Join(result, "\n")
+	if err := os.WriteFile(configPath, []byte(cleaned), 0644); err != nil {
+		log.Printf("[Calibrator] Warning: could not strip banner: %v", err)
+	} else {
+		log.Println("[Calibrator] Stripped auto-mode banner (manual mode active)")
+	}
+}
+
+// writeBannerToConfig replaces any existing banner in config.ini or inserts one
+// before the cpu_threshold line.
+func (c *Calibrator) writeBannerToConfig(banner []string) {
+	content, err := os.ReadFile(c.configPath)
+	if err != nil {
+		log.Printf("[Calibrator] Warning: could not read config for banner: %v", err)
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var result []string
+	inBanner := false
+	bannerInserted := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip existing banner
+		if trimmed == bannerStart {
+			inBanner = true
+			continue
+		}
+		if inBanner {
+			if trimmed == bannerEnd {
+				inBanner = false
+			}
+			continue
+		}
+
+		// Insert new banner before the cpu_threshold line (commented or not)
+		if !bannerInserted && (trimmed == "# cpu_threshold" ||
+			strings.HasPrefix(trimmed, "# cpu_threshold =") ||
+			strings.HasPrefix(trimmed, "# cpu_threshold=") ||
+			strings.HasPrefix(trimmed, "cpu_threshold")) {
+			result = append(result, banner...)
+			bannerInserted = true
+		}
+
+		result = append(result, line)
+	}
+
+	// If no cpu_threshold line found, append banner at end
+	if !bannerInserted {
+		result = append(result, banner...)
+		result = append(result, "# cpu_threshold = 25")
+	}
+
+	output := strings.Join(result, "\n")
+	if err := os.WriteFile(c.configPath, []byte(output), 0644); err != nil {
+		log.Printf("[Calibrator] Warning: could not write banner: %v", err)
+	}
+}
+
+// padTo returns padding spaces to align banner content to a fixed width.
+func padTo(width int, content string) string {
+	// This is used for the learning banner dynamic line
+	pad := width - len(content)
+	if pad < 1 {
+		pad = 1
+	}
+	return strings.Repeat(" ", pad)
+}
+
+// --- Statistical helpers ---
+
 func findIdleBaseline(samples []monitor.CPUSample) (float64, error) {
 	for _, maxStddev := range []float64{stddevTight, stddevLoose} {
 		if baseline, found := slidingWindowMin(samples, maxStddev); found {
@@ -134,8 +286,6 @@ func findIdleBaseline(samples []monitor.CPUSample) (float64, error) {
 	return 0, fmt.Errorf("no stable idle windows found (stddev always > %.1f%%)", stddevLoose)
 }
 
-// slidingWindowMin slides a 30-min window over samples and returns the minimum
-// average from windows whose standard deviation is within the given limit.
 func slidingWindowMin(samples []monitor.CPUSample, maxStddev float64) (float64, bool) {
 	minAvg := math.MaxFloat64
 	found := false
@@ -177,28 +327,12 @@ func stddev(vals []float64, avg float64) float64 {
 	return math.Sqrt(sum / float64(len(vals)))
 }
 
-// updateConfigThreshold writes the new cpu_threshold to the INI file.
-func (c *Calibrator) updateConfigThreshold(threshold float64) error {
-	cfg, err := ini.Load(c.configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
+// --- State persistence ---
 
-	cfg.Section("monitoring").Key("cpu_threshold").SetValue(fmt.Sprintf("%.0f", threshold))
-
-	if err := cfg.SaveTo(c.configPath); err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-
-	log.Printf("[Calibrator] Wrote cpu_threshold=%.0f%% to %s", threshold, c.configPath)
-	return nil
-}
-
-// loadState reads calibration state from the state file.
 func (c *Calibrator) loadState() {
 	file, err := os.Open(c.statePath)
 	if err != nil {
-		return // File doesn't exist yet — first run
+		return
 	}
 	defer file.Close()
 
@@ -221,11 +355,18 @@ func (c *Calibrator) loadState() {
 			if t, err := time.Parse(time.RFC3339, val); err == nil {
 				c.state.StartTime = t
 			}
+		case "current_threshold":
+			if v, err := strconv.ParseFloat(val, 64); err == nil {
+				c.state.CurrentThreshold = v
+			}
+		case "idle_baseline":
+			if v, err := strconv.ParseFloat(val, 64); err == nil {
+				c.state.IdleBaseline = v
+			}
 		}
 	}
 }
 
-// saveState writes calibration state to the state file.
 func (c *Calibrator) saveState() error {
 	file, err := os.Create(c.statePath)
 	if err != nil {
@@ -237,6 +378,8 @@ func (c *Calibrator) saveState() error {
 		fmt.Sprintf("initial_done=%s", strconv.FormatBool(c.state.InitialDone)),
 		fmt.Sprintf("last_calib_time=%s", c.state.LastCalibTime.Format(time.RFC3339)),
 		fmt.Sprintf("start_time=%s", c.state.StartTime.Format(time.RFC3339)),
+		fmt.Sprintf("current_threshold=%.0f", c.state.CurrentThreshold),
+		fmt.Sprintf("idle_baseline=%.2f", c.state.IdleBaseline),
 	}
 	for _, l := range lines {
 		if _, err := fmt.Fprintln(file, l); err != nil {

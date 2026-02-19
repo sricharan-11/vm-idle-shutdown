@@ -25,6 +25,7 @@ BINARY_NAME="idleshutdown"
 BINARY_DEST="/usr/local/bin/${BINARY_NAME}"
 CONFIG_DIR="/etc/idleshutdown"
 CONFIG_FILE="${CONFIG_DIR}/config.ini"
+DEFAULTS_FILE="${CONFIG_DIR}/default.ini"
 SERVICE_NAME="IdleShutdown"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -68,7 +69,7 @@ if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
 fi
 
 # Step 1: Download binary from main branch
-echo -e "${CYAN}[1/5]${NC} Downloading binary..."
+echo -e "${CYAN}[1/6]${NC} Downloading binary..."
 ${DOWNLOADER} "${TEMP_DIR}/${BINARY_NAME}" "${BASE_URL}/${BINARY_NAME}"
 if [[ ! -f "${TEMP_DIR}/${BINARY_NAME}" ]] || [[ ! -s "${TEMP_DIR}/${BINARY_NAME}" ]]; then
     echo -e "${RED}ERROR: Failed to download binary${NC}"
@@ -86,12 +87,12 @@ chmod 755 "${BINARY_DEST}"
 echo -e "${GREEN}      ✓ Binary installed to ${BINARY_DEST}${NC}"
 
 # Step 2: Create config directory
-echo -e "${CYAN}[2/5]${NC} Creating config directory..."
+echo -e "${CYAN}[2/6]${NC} Creating config directory..."
 mkdir -p "${CONFIG_DIR}"
 echo -e "${GREEN}      ✓ Directory created${NC}"
 
 # Step 3: Download config file
-echo -e "${CYAN}[3/5]${NC} Installing configuration..."
+echo -e "${CYAN}[3/6]${NC} Installing configuration..."
 if [[ -f "${CONFIG_FILE}" ]]; then
     echo -e "${YELLOW}      ⚠ Config exists - keeping current configuration${NC}"
 else
@@ -100,15 +101,21 @@ else
     echo -e "${GREEN}      ✓ Configuration installed${NC}"
 fi
 
-# Step 4: Download and install systemd service
-echo -e "${CYAN}[4/5]${NC} Installing systemd service..."
+# Step 4: Download calibration defaults
+echo -e "${CYAN}[4/6]${NC} Installing calibration defaults..."
+${DOWNLOADER} "${DEFAULTS_FILE}" "${BASE_URL}/config/default.ini"
+chmod 644 "${DEFAULTS_FILE}"
+echo -e "${GREEN}      ✓ Defaults installed${NC}"
+
+# Step 5: Download and install systemd service
+echo -e "${CYAN}[5/6]${NC} Installing systemd service..."
 ${DOWNLOADER} "${SERVICE_FILE}" "${BASE_URL}/scripts/idleshutdown.service"
 chmod 644 "${SERVICE_FILE}"
 systemctl daemon-reload
 echo -e "${GREEN}      ✓ Service installed${NC}"
 
-# Step 5: Enable and start service
-echo -e "${CYAN}[5/5]${NC} Enabling and starting service..."
+# Step 6: Enable and start service
+echo -e "${CYAN}[6/6]${NC} Enabling and starting service..."
 systemctl enable ${SERVICE_NAME} --quiet
 systemctl start ${SERVICE_NAME}
 echo -e "${GREEN}      ✓ Service started${NC}"
