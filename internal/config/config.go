@@ -37,24 +37,25 @@ type Config struct {
 
 // CalibrationConfig holds the calibration timing parameters from default.ini.
 type CalibrationConfig struct {
-	InitialTrackingHours      int
-	RecalibrationIntervalDays int
-	RecalibrationTrackingHours int
+	// Use float64 to allow fractional hours (e.g. 0.5 hours for testing)
+	InitialTrackingHours       float64
+	RecalibrationIntervalDays  float64
+	RecalibrationTrackingHours float64
 }
 
 // InitialLookback returns the initial tracking duration.
 func (c *CalibrationConfig) InitialLookback() time.Duration {
-	return time.Duration(c.InitialTrackingHours) * time.Hour
+	return time.Duration(c.InitialTrackingHours * float64(time.Hour))
 }
 
 // RecalibrationInterval returns how often recalibration happens.
 func (c *CalibrationConfig) RecalibrationInterval() time.Duration {
-	return time.Duration(c.RecalibrationIntervalDays) * 24 * time.Hour
+	return time.Duration(c.RecalibrationIntervalDays * 24 * float64(time.Hour))
 }
 
 // RecalibrationLookback returns the data window for recalibration.
 func (c *CalibrationConfig) RecalibrationLookback() time.Duration {
-	return time.Duration(c.RecalibrationTrackingHours) * time.Hour
+	return time.Duration(c.RecalibrationTrackingHours * float64(time.Hour))
 }
 
 // Load reads configuration from the INI file at the specified path.
@@ -106,9 +107,9 @@ func Load(path string) (*Config, error) {
 // LoadDefaults reads calibration timing parameters from default.ini.
 func LoadDefaults(path string) (*CalibrationConfig, error) {
 	defaults := &CalibrationConfig{
-		InitialTrackingHours:       24,
-		RecalibrationIntervalDays:  7,
-		RecalibrationTrackingHours: 72,
+		InitialTrackingHours:       24.0,
+		RecalibrationIntervalDays:  7.0,
+		RecalibrationTrackingHours: 72.0,
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -124,19 +125,19 @@ func LoadDefaults(path string) (*CalibrationConfig, error) {
 	section := iniFile.Section("calibration")
 
 	if key, err := section.GetKey("initial_tracking_hours"); err == nil {
-		if val, err := key.Int(); err == nil && val > 0 {
+		if val, err := key.Float64(); err == nil && val > 0 {
 			defaults.InitialTrackingHours = val
 		}
 	}
 
 	if key, err := section.GetKey("recalibration_interval_days"); err == nil {
-		if val, err := key.Int(); err == nil && val > 0 {
+		if val, err := key.Float64(); err == nil && val > 0 {
 			defaults.RecalibrationIntervalDays = val
 		}
 	}
 
 	if key, err := section.GetKey("recalibration_tracking_hours"); err == nil {
-		if val, err := key.Int(); err == nil && val > 0 {
+		if val, err := key.Float64(); err == nil && val > 0 {
 			defaults.RecalibrationTrackingHours = val
 		}
 	}

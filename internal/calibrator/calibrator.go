@@ -145,13 +145,18 @@ func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (f
 // WriteLearningBanner writes a learning-phase banner into config.ini.
 func (c *Calibrator) WriteLearningBanner() {
 	remaining := c.LearningTimeRemaining()
-	hours := int(remaining.Hours())
-	mins := int(remaining.Minutes()) % 60
+	
+	var timeStr string
+	if remaining.Hours() >= 1 {
+		timeStr = fmt.Sprintf("%dh %dm", int(remaining.Hours()), int(remaining.Minutes())%60)
+	} else {
+		timeStr = fmt.Sprintf("%dm %ds", int(remaining.Minutes()), int(remaining.Seconds())%60)
+	}
 
 	banner := []string{
 		bannerStart,
-		fmt.Sprintf("# │  🔍 LEARNING — collecting CPU data (%dh %dm remaining)%s│",
-			hours, mins, padTo(52, fmt.Sprintf("🔍 LEARNING — collecting CPU data (%dh %dm remaining)", hours, mins))),
+		fmt.Sprintf("# │  🔍 LEARNING — collecting CPU data (%s remaining)%s│",
+			timeStr, padTo(52, fmt.Sprintf("🔍 LEARNING — collecting CPU data (%s remaining)", timeStr))),
 		"# │  Shutdown evaluation is PAUSED until learning completes  │",
 		"# │  To set manually, uncomment cpu_threshold below          │",
 		bannerEnd,
