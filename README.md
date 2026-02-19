@@ -2,7 +2,7 @@
 
 A lightweight service for RHEL VMs that automatically shuts down idle virtual machines to save costs.
 
-The agent monitors CPU usage and logged-in users. When both conditions are met for the configured duration, the VM is safely shut down.
+The agent monitors CPU usage and logged-in users. When the VM has been idle long enough, it safely shuts down.
 
 ## Quick Install
 
@@ -25,40 +25,59 @@ curl -sSL https://raw.githubusercontent.com/sricharan-11/vm-idle-shutdown/main/s
 
 ## How It Works
 
-The agent checks two conditions continuously:
+The agent shuts down the VM when **both** conditions are true continuously:
 
 | Condition | Default |
 |-----------|---------|
-| CPU usage below threshold | < 25% for 60 minutes |
-| No users logged in | 0 users for 60 minutes |
+| CPU usage below threshold | for 60 minutes |
+| No users logged in | for 60 minutes |
 
-**When both conditions are true, the VM shuts down automatically.**
+### CPU Threshold: Auto vs Manual
+
+The agent supports two modes for determining the CPU threshold, set via `cpu_mode` in the config file.
+
+#### `cpu_mode = auto` (default)
+
+The agent **self-calibrates** the idle CPU threshold — no manual tuning needed.
+
+**How calibration works:**
+1. After **24 hours** of data collection, the agent analyzes CPU usage patterns
+2. It scans the history using sliding 30-minute windows to find periods of stable, low CPU (standard deviation < 1%, fallback: 2%)
+3. It takes the **minimum average CPU** across all qualifying idle windows
+4. Sets `cpu_threshold = idle_avg + 3%` and restarts
+5. Every **7 days**, it recalibrates using the last **72 hours** of data for a more accurate reading
+
+The `cpu_threshold` in the config file is **automatically updated** after each calibration.
+
+#### `cpu_mode = manual`
+
+Uses the `cpu_threshold` value in the config file as-is. No calibration is performed.
 
 ---
 
 ## Configuration
 
-The configuration file is located at `/etc/idleshutdown/config.ini`:
+The configuration file is at `/etc/idleshutdown/config.ini`:
 
 ```ini
 [monitoring]
-# Duration in minutes to monitor CPU usage
+# Minutes of sustained low CPU before shutdown (x)
 cpu_check_minutes = 60
 
-# Duration in minutes to check for logged-in users  
+# Minutes of no logged-in users before shutdown (y)
 user_check_minutes = 60
 
-# CPU usage threshold percentage
+# CPU threshold % — auto-updated in auto mode, fixed in manual mode (z)
 cpu_threshold = 25
+
+# auto = self-calibrating | manual = use cpu_threshold above
+cpu_mode = auto
 ```
 
-### Editing Configuration
+### Applying Config Changes
 
 ```bash
-# Edit the config file
 sudo vi /etc/idleshutdown/config.ini
-
-# Restart the service to apply changes
 sudo systemctl restart IdleShutdown
 ```
 
@@ -67,22 +86,21 @@ sudo systemctl restart IdleShutdown
 ## Service Management
 
 ```bash
-# Check if the service is running
+# Check service status
 sudo systemctl status IdleShutdown
 
-# View live logs
+# View live logs (including calibration events)
 sudo journalctl -u IdleShutdown -f
 
 # Stop the service (prevents auto-shutdown)
 sudo systemctl stop IdleShutdown
 
-# Start the service
+# Start / Restart
 sudo systemctl start IdleShutdown
+sudo systemctl restart IdleShutdown
 
-# Disable auto-start on boot
+# Disable / Enable auto-start on boot
 sudo systemctl disable IdleShutdown
-
-# Re-enable auto-start on boot
 sudo systemctl enable IdleShutdown
 ```
 
@@ -91,39 +109,43 @@ sudo systemctl enable IdleShutdown
 ## Requirements
 
 - RHEL 7, 8, or 9 (also works on CentOS, Rocky Linux, AlmaLinux)
-- Root access for installation
-- `curl` or `wget` for one-line install
+- Root access
+- `curl` or `wget`
 
 ---
 
 ## Installed Files
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `/usr/local/bin/idleshutdown` | The agent binary |
-| `/etc/idleshutdown/config.ini` | Configuration file |
+| `/usr/local/bin/idleshutdown` | Agent binary |
+| `/etc/idleshutdown/config.ini` | Configuration |
+| `/etc/idleshutdown/calibration.state` | Auto-calibration state (auto mode) |
 | `/etc/systemd/system/IdleShutdown.service` | Systemd service |
 
 ---
 
 ## Troubleshooting
 
-### Service won't start
+**Service won't start:**
 ```bash
-# Check logs for errors
 sudo journalctl -u IdleShutdown -e
 ```
 
-### Test without actual shutdown
+**Test without actual shutdown:**
 ```bash
-# Run in dry-run mode (logs what would happen, but doesn't shut down)
 sudo /usr/local/bin/idleshutdown --dry-run
 ```
 
-### VM shut down unexpectedly
-Check the logs to see why:
+**VM shut down unexpectedly:**
 ```bash
 sudo journalctl -u IdleShutdown | grep -i shutdown
+```
+
+**Force recalibration (auto mode):**
+```bash
+sudo rm /etc/idleshutdown/calibration.state
+sudo systemctl restart IdleShutdown
 ```
 
 ---
