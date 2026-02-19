@@ -182,7 +182,12 @@ func StripBanner(configPath string) {
 		return
 	}
 
-	lines := strings.Split(string(content), "\n")
+	// Normalize line endings to \n
+	text := string(content)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	
 	var result []string
 	inBanner := false
 
@@ -202,6 +207,7 @@ func StripBanner(configPath string) {
 		result = append(result, line)
 	}
 
+	// Write back using LF only
 	cleaned := strings.Join(result, "\n")
 	if err := os.WriteFile(configPath, []byte(cleaned), 0644); err != nil {
 		log.Printf("[Calibrator] Warning: could not strip banner: %v", err)
@@ -219,7 +225,12 @@ func (c *Calibrator) writeBannerToConfig(banner []string) {
 		return
 	}
 
-	lines := strings.Split(string(content), "\n")
+	// Normalize line endings to \n
+	text := string(content)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+
 	var result []string
 	inBanner := false
 	bannerInserted := false
@@ -257,6 +268,7 @@ func (c *Calibrator) writeBannerToConfig(banner []string) {
 		result = append(result, "# cpu_threshold = 25")
 	}
 
+	// Write back using LF only
 	output := strings.Join(result, "\n")
 	if err := os.WriteFile(c.configPath, []byte(output), 0644); err != nil {
 		log.Printf("[Calibrator] Warning: could not write banner: %v", err)
