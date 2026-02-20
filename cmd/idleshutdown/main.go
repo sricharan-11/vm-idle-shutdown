@@ -24,7 +24,7 @@ const (
 	// evaluationInterval is how often the shutdown decision is evaluated.
 	evaluationInterval = 1 * time.Minute
 	// calibrationCheckInterval is how often we check if a calibration run is due.
-	calibrationCheckInterval = 1 * time.Hour
+	calibrationCheckInterval = 1 * time.Minute
 )
 
 func main() {
