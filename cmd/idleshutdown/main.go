@@ -167,7 +167,7 @@ func runCalibrationLoop(
 			if calib.ShouldRunInitial() {
 				log.Printf("[Calibrator] %s elapsed — running initial calibration (%d samples)...",
 					calibCfg.InitialLookback(), len(samples))
-				threshold, err := calib.Run(samples, calibCfg.InitialLookback())
+				threshold, err := calib.Run(samples, calibCfg.InitialLookback(), samplingInterval)
 				if err != nil {
 					log.Printf("[Calibrator] Initial calibration failed: %v", err)
 					continue
@@ -178,7 +178,7 @@ func runCalibrationLoop(
 			} else if calib.ShouldRunWeekly() {
 				log.Printf("[Calibrator] Weekly recalibration due — %s lookback (%d samples)...",
 					calibCfg.RecalibrationLookback(), len(samples))
-				threshold, err := calib.Run(samples, calibCfg.RecalibrationLookback())
+				threshold, err := calib.Run(samples, calibCfg.RecalibrationLookback(), samplingInterval)
 				if err != nil {
 					log.Printf("[Calibrator] Weekly recalibration failed: %v", err)
 					continue

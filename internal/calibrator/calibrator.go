@@ -102,7 +102,7 @@ func (c *Calibrator) ShouldRunWeekly() bool {
 }
 
 // Run performs calibration and returns the new threshold.
-func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (float64, error) {
+func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration, samplingInterval time.Duration) (float64, error) {
 	cutoff := time.Now().Add(-lookback)
 	var window []monitor.CPUSample
 	for _, s := range samples {
@@ -111,8 +111,17 @@ func (c *Calibrator) Run(samples []monitor.CPUSample, lookback time.Duration) (f
 		}
 	}
 
-	if len(window) < minCalibSamples {
-		return 0, fmt.Errorf("insufficient samples (%d, need %d)", len(window), minCalibSamples)
+	// Dynamic sample requirement: expect samples every samplingInterval.
+	// We require at least 50% of expected samples to ensure data quality,
+	// but never fewer than 5 samples (2.5 minutes of data).
+	expectedSamples := int(lookback / samplingInterval)
+	minSamples := int(float64(expectedSamples) * 0.5)
+	if minSamples < 5 {
+		minSamples = 5
+	}
+
+	if len(window) < minSamples {
+		return 0, fmt.Errorf("insufficient samples (%d, need %d for %s lookback)", len(window), minSamples, lookback)
 	}
 
 	log.Printf("[Calibrator] Calibrating on %d samples from last %s", len(window), lookback)
